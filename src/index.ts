@@ -70,8 +70,12 @@ const app  = express()
 const PORT = Number(process.env.PORT ?? 4000)
 
 app.use(cors({
-  origin:  process.env.CLIENT_URL ?? 'http://localhost:3000',
+  origin: [
+    'https://nexus-event-two.vercel.app',
+    'http://localhost:3000',
+  ],
   methods: ['GET', 'POST'],
+  credentials: true,
 }))
 app.use(express.json())
 
