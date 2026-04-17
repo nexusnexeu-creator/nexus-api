@@ -39,6 +39,8 @@ interface WaitlistRequestBody {
 }
 
 // ─── BASE NUMBERS ─────────────────────────────────────────────────────────────
+// Change these three numbers whenever you want to reset.
+// Save the file — tsx watch restarts automatically and the new numbers take effect.
 
 const BASE_BRANDS:      number = 88
 const BASE_INFLUENCERS: number = 446
@@ -58,12 +60,10 @@ function randomIncrement(): number {
   return Math.floor(Math.random() * 7) + 1
 }
 
-// ─── EXPRESS + MONGODB ───────────────────────────────────────────────────────
+// ─── EXPRESS ─────────────────────────────────────────────────────────────────
 
 const app  = express()
 const PORT = Number(process.env.PORT ?? 4000)
-
-// ─── CORS ─────────────────────────────────────────────────────────────────────
 
 app.use(cors({
   origin: [
@@ -74,7 +74,6 @@ app.use(cors({
   credentials: true,
 }))
 
-// Handle preflight requests for all routes
 app.options('*', cors({
   origin: [
     'https://nexus-event-two.vercel.app',
@@ -112,8 +111,8 @@ const simulatedOffsetSchema = new Schema<ISimulatedOffset>({
   updatedAt:         { type: Date,   default: Date.now         },
 })
 
-const Waitlist:        Model<IWaitlistEntry>   = mongoose.model<IWaitlistEntry>('Waitlist',          waitlistSchema)
-const SimulatedOffset: Model<ISimulatedOffset> = mongoose.model<ISimulatedOffset>('SimulatedOffset', simulatedOffsetSchema)
+const Waitlist:        Model<IWaitlistEntry>   = mongoose.model<IWaitlistEntry>  ('Waitlist',          waitlistSchema)
+const SimulatedOffset: Model<ISimulatedOffset> = mongoose.model<ISimulatedOffset>('SimulatedOffset',   simulatedOffsetSchema)
 
 // ─── SSE CLIENT STORE ─────────────────────────────────────────────────────────
 
@@ -162,11 +161,7 @@ async function runAutoIncrement(): Promise<void> {
     await SimulatedOffset.updateOne(
       {},
       {
-        $inc: {
-          brandsOffset:      bInc,
-          influencersOffset: iInc,
-          agenciesOffset:    aInc,
-        },
+        $inc: { brandsOffset: bInc, influencersOffset: iInc, agenciesOffset: aInc },
         $set: { updatedAt: new Date() },
       },
       { upsert: true },
@@ -186,12 +181,10 @@ async function runAutoIncrement(): Promise<void> {
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 
-// Health check
 app.get('/health', (_req: Request, res: Response): void => {
   res.json({ status: 'ok', connectedClients: sseClients.size })
 })
 
-// GET /api/stats — one-shot current stats
 app.get('/api/stats', async (_req: Request, res: Response): Promise<void> => {
   try {
     const stats = await fetchStats()
@@ -202,19 +195,17 @@ app.get('/api/stats', async (_req: Request, res: Response): Promise<void> => {
   }
 })
 
-// GET /api/stats/stream — SSE live stats stream
 app.get('/api/stats/stream', async (req: Request, res: Response): Promise<void> => {
   res.writeHead(200, {
-    'Content-Type':                'text/event-stream',
-    'Cache-Control':               'no-cache',
-    'Connection':                  'keep-alive',
-    'X-Accel-Buffering':           'no',
-    'Access-Control-Allow-Origin': 'https://nexus-event-two.vercel.app',
+    'Content-Type':                     'text/event-stream',
+    'Cache-Control':                    'no-cache',
+    'Connection':                       'keep-alive',
+    'X-Accel-Buffering':                'no',
+    'Access-Control-Allow-Origin':      'https://nexus-event-two.vercel.app',
     'Access-Control-Allow-Credentials': 'true',
   })
   res.flushHeaders()
 
-  // Send current stats immediately on connect
   try {
     const stats = await fetchStats()
     sendToClient(res, stats)
@@ -222,12 +213,10 @@ app.get('/api/stats/stream', async (req: Request, res: Response): Promise<void> 
     console.error('SSE initial fetch error:', err)
   }
 
-  // Register this client
   const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
   sseClients.set(clientId, res)
   console.log(`🔌  SSE connected  [${clientId}]  total clients: ${sseClients.size}`)
 
-  // Heartbeat every 25s
   const heartbeat = setInterval(() => {
     res.write(': ping\n\n')
     if (typeof (res as unknown as { flush?: () => void }).flush === 'function') {
@@ -242,7 +231,6 @@ app.get('/api/stats/stream', async (req: Request, res: Response): Promise<void> 
   })
 })
 
-// POST /api/waitlist — submit a waitlist entry
 app.post(
   '/api/waitlist',
   async (
@@ -278,7 +266,6 @@ app.post(
       broadcast(stats)
 
       console.log(`✅  New signup  [${category}]  ${email.trim()}  →  total: ${stats.total}`)
-
       res.status(201).json({ success: true, stats })
     } catch (err: unknown) {
       console.error('POST /api/waitlist error:', err)
@@ -287,7 +274,6 @@ app.post(
   },
 )
 
-// GET /api/entries — admin: list all real entries
 app.get('/api/entries', async (_req: Request, res: Response): Promise<void> => {
   try {
     const entries = await Waitlist.find().sort({ joinedAt: -1 }).select('-__v').lean()
@@ -304,23 +290,23 @@ async function bootstrap(): Promise<void> {
   await mongoose.connect(mongoUri as string)
   console.log('✅  MongoDB connected')
 
-  const existing = await SimulatedOffset.findOne()
-  if (!existing) {
-    await SimulatedOffset.create({
-      brandsOffset:      BASE_BRANDS,
-      influencersOffset: BASE_INFLUENCERS,
-      agenciesOffset:    BASE_AGENCIES,
-    })
-    console.log(
-      `📊  Simulated offsets initialised` +
-      `  brands: ${BASE_BRANDS}  influencers: ${BASE_INFLUENCERS}  agencies: ${BASE_AGENCIES}`,
-    )
-  } else {
-    console.log(
-      `📊  Existing offsets loaded` +
-      `  brands: ${existing.brandsOffset}  influencers: ${existing.influencersOffset}  agencies: ${existing.agenciesOffset}`,
-    )
-  }
+  // Always overwrite the offsets with the current BASE numbers on every startup.
+  // To reset your numbers: change the three BASE constants above and save/restart.
+  await SimulatedOffset.updateOne(
+    {},
+    {
+      $set: {
+        brandsOffset:      BASE_BRANDS,
+        influencersOffset: BASE_INFLUENCERS,
+        agenciesOffset:    BASE_AGENCIES,
+        updatedAt:         new Date(),
+      },
+    },
+    { upsert: true },
+  )
+  console.log(
+    `📊  Offsets set  brands: ${BASE_BRANDS}  influencers: ${BASE_INFLUENCERS}  agencies: ${BASE_AGENCIES}`,
+  )
 
   setInterval(() => { void runAutoIncrement() }, AUTO_INCREMENT_INTERVAL_MS)
   console.log(`⏱️   Auto-increment every ${AUTO_INCREMENT_INTERVAL_MS / 60_000} minutes`)
