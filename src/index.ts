@@ -42,7 +42,7 @@ interface WaitlistRequestBody {
 
 const BASE_BRANDS:      number = 88
 const BASE_INFLUENCERS: number = 446
-const BASE_AGENCIES:    number = 67
+const BASE_AGENCIES:    number = 68
 
 const AUTO_INCREMENT_INTERVAL_MS: number = 3 * 60 * 1_000
 
