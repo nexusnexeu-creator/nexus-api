@@ -16,7 +16,6 @@ interface IStats {
   total:       number
 }
 
-// Real waitlist entries (actual signups)
 interface IWaitlistEntry extends Document {
   email:     string
   instagram: string
@@ -25,7 +24,6 @@ interface IWaitlistEntry extends Document {
   joinedAt:  Date
 }
 
-// Simulated offset — persisted in DB so numbers survive server restarts
 interface ISimulatedOffset extends Document {
   brandsOffset:      number
   influencersOffset: number
@@ -41,14 +39,11 @@ interface WaitlistRequestBody {
 }
 
 // ─── BASE NUMBERS ─────────────────────────────────────────────────────────────
-// These are the numbers that appear on day one before any real signups.
-// Influencers starts at 1,046 as requested.
 
 const BASE_BRANDS:      number = 312
 const BASE_INFLUENCERS: number = 1_046
 const BASE_AGENCIES:    number = 127
 
-// Auto-increment fires every 3 minutes
 const AUTO_INCREMENT_INTERVAL_MS: number = 3 * 60 * 1_000
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -59,7 +54,6 @@ function isCategory(value: string): value is Category {
   return (VALID_CATEGORIES as readonly string[]).includes(value)
 }
 
-/** Returns a random integer between 1 and 7 inclusive */
 function randomIncrement(): number {
   return Math.floor(Math.random() * 7) + 1
 }
@@ -69,15 +63,31 @@ function randomIncrement(): number {
 const app  = express()
 const PORT = Number(process.env.PORT ?? 4000)
 
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+
 app.use(cors({
   origin: [
     'https://nexus-event-two.vercel.app',
     'http://localhost:3000',
   ],
-  methods: ['GET', 'POST'],
+  methods:     ['GET', 'POST', 'OPTIONS'],
   credentials: true,
 }))
+
+// Handle preflight requests for all routes
+app.options('*', cors({
+  origin: [
+    'https://nexus-event-two.vercel.app',
+    'http://localhost:3000',
+  ],
+  methods:     ['GET', 'POST', 'OPTIONS'],
+  credentials: true,
+}))
+
 app.use(express.json())
+app.set('trust proxy', 1)
+
+// ─── MONGODB ──────────────────────────────────────────────────────────────────
 
 const mongoUri = process.env.MONGO_URI
 if (!mongoUri) {
@@ -102,17 +112,15 @@ const simulatedOffsetSchema = new Schema<ISimulatedOffset>({
   updatedAt:         { type: Date,   default: Date.now         },
 })
 
-const Waitlist:          Model<IWaitlistEntry>      = mongoose.model<IWaitlistEntry>('Waitlist',          waitlistSchema)
-const SimulatedOffset:   Model<ISimulatedOffset>    = mongoose.model<ISimulatedOffset>('SimulatedOffset', simulatedOffsetSchema)
+const Waitlist:        Model<IWaitlistEntry>   = mongoose.model<IWaitlistEntry>('Waitlist',          waitlistSchema)
+const SimulatedOffset: Model<ISimulatedOffset> = mongoose.model<ISimulatedOffset>('SimulatedOffset', simulatedOffsetSchema)
 
 // ─── SSE CLIENT STORE ─────────────────────────────────────────────────────────
 
 const sseClients = new Map<string, Response>()
 
-/**
- * Fetches live stats = real DB signups + persisted simulated offset.
- * This means numbers always grow — both organically and artificially.
- */
+// ─── STATS ────────────────────────────────────────────────────────────────────
+
 async function fetchStats(): Promise<IStats> {
   const [realBrands, realInfluencers, realAgencies, offset] = await Promise.all([
     Waitlist.countDocuments({ category: 'brand'      }),
@@ -134,25 +142,23 @@ async function fetchStats(): Promise<IStats> {
 
 function sendToClient(res: Response, stats: IStats): void {
   res.write(`data: ${JSON.stringify(stats)}\n\n`)
+  if (typeof (res as unknown as { flush?: () => void }).flush === 'function') {
+    (res as unknown as { flush: () => void }).flush()
+  }
 }
 
 function broadcast(stats: IStats): void {
   sseClients.forEach((res) => sendToClient(res, stats))
 }
 
-// ─── AUTO-INCREMENT EVERY 3 MINUTES ──────────────────────────────────────────
-/**
- * Every 3 minutes:
- *   • Adds a random number (1–7) to each category offset in MongoDB
- *   • Broadcasts fresh stats to every connected browser — no reload needed
- */
+// ─── AUTO-INCREMENT ───────────────────────────────────────────────────────────
+
 async function runAutoIncrement(): Promise<void> {
   try {
     const bInc = randomIncrement()
     const iInc = randomIncrement()
     const aInc = randomIncrement()
 
-    // Upsert: create the offset document if it doesn't exist yet
     await SimulatedOffset.updateOne(
       {},
       {
@@ -178,41 +184,6 @@ async function runAutoIncrement(): Promise<void> {
   }
 }
 
-// ─── STARTUP: ensure offset document exists + start auto-increment timer ──────
-
-async function bootstrap(): Promise<void> {
-  await mongoose.connect(mongoUri as string)
-  console.log('✅  MongoDB connected')
-
-  // Ensure the single SimulatedOffset document exists with base values
-  const existing = await SimulatedOffset.findOne()
-  if (!existing) {
-    await SimulatedOffset.create({
-      brandsOffset:      BASE_BRANDS,
-      influencersOffset: BASE_INFLUENCERS,
-      agenciesOffset:    BASE_AGENCIES,
-    })
-    console.log(
-      `📊  Simulated offsets initialised` +
-      `  brands: ${BASE_BRANDS}  influencers: ${BASE_INFLUENCERS}  agencies: ${BASE_AGENCIES}`,
-    )
-  } else {
-    console.log(
-      `📊  Existing offsets loaded` +
-      `  brands: ${existing.brandsOffset}  influencers: ${existing.influencersOffset}  agencies: ${existing.agenciesOffset}`,
-    )
-  }
-
-  // Fire auto-increment every 3 minutes
-  setInterval(() => { void runAutoIncrement() }, AUTO_INCREMENT_INTERVAL_MS)
-  console.log(`⏱️   Auto-increment every ${AUTO_INCREMENT_INTERVAL_MS / 60_000} minutes`)
-
-  // Start HTTP server
-  app.listen(PORT, () => {
-    console.log(`🚀  Nexus API  →  http://localhost:${PORT}`)
-  })
-}
-
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 
 // Health check
@@ -234,10 +205,12 @@ app.get('/api/stats', async (_req: Request, res: Response): Promise<void> => {
 // GET /api/stats/stream — SSE live stats stream
 app.get('/api/stats/stream', async (req: Request, res: Response): Promise<void> => {
   res.writeHead(200, {
-    'Content-Type':      'text/event-stream',
-    'Cache-Control':     'no-cache',
-    'Connection':        'keep-alive',
-    'X-Accel-Buffering': 'no',
+    'Content-Type':                'text/event-stream',
+    'Cache-Control':               'no-cache',
+    'Connection':                  'keep-alive',
+    'X-Accel-Buffering':           'no',
+    'Access-Control-Allow-Origin': 'https://nexus-event-two.vercel.app',
+    'Access-Control-Allow-Credentials': 'true',
   })
   res.flushHeaders()
 
@@ -254,9 +227,12 @@ app.get('/api/stats/stream', async (req: Request, res: Response): Promise<void> 
   sseClients.set(clientId, res)
   console.log(`🔌  SSE connected  [${clientId}]  total clients: ${sseClients.size}`)
 
-  // Heartbeat every 25 s — keeps connection alive through proxies/load balancers
+  // Heartbeat every 25s
   const heartbeat = setInterval(() => {
     res.write(': ping\n\n')
+    if (typeof (res as unknown as { flush?: () => void }).flush === 'function') {
+      (res as unknown as { flush: () => void }).flush()
+    }
   }, 25_000)
 
   req.on('close', () => {
@@ -275,7 +251,6 @@ app.post(
   ): Promise<void> => {
     const { email, instagram, tiktok, category } = req.body
 
-    // Validation
     if (!email?.trim() || !instagram?.trim() || !category?.trim()) {
       res.status(400).json({ error: 'email, instagram, and category are required.' })
       return
@@ -286,14 +261,12 @@ app.post(
     }
 
     try {
-      // Duplicate check
       const existing = await Waitlist.findOne({ email: email.toLowerCase().trim() })
       if (existing) {
         res.status(409).json({ error: 'This email is already on the waitlist.' })
         return
       }
 
-      // Save real entry to DB
       await Waitlist.create({
         email:     email.trim(),
         instagram: instagram.trim(),
@@ -301,7 +274,6 @@ app.post(
         category,
       })
 
-      // Fetch fresh combined stats (real + simulated) and broadcast instantly
       const stats = await fetchStats()
       broadcast(stats)
 
@@ -326,7 +298,37 @@ app.get('/api/entries', async (_req: Request, res: Response): Promise<void> => {
   }
 })
 
-// ─── BOOT ─────────────────────────────────────────────────────────────────────
+// ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
+
+async function bootstrap(): Promise<void> {
+  await mongoose.connect(mongoUri as string)
+  console.log('✅  MongoDB connected')
+
+  const existing = await SimulatedOffset.findOne()
+  if (!existing) {
+    await SimulatedOffset.create({
+      brandsOffset:      BASE_BRANDS,
+      influencersOffset: BASE_INFLUENCERS,
+      agenciesOffset:    BASE_AGENCIES,
+    })
+    console.log(
+      `📊  Simulated offsets initialised` +
+      `  brands: ${BASE_BRANDS}  influencers: ${BASE_INFLUENCERS}  agencies: ${BASE_AGENCIES}`,
+    )
+  } else {
+    console.log(
+      `📊  Existing offsets loaded` +
+      `  brands: ${existing.brandsOffset}  influencers: ${existing.influencersOffset}  agencies: ${existing.agenciesOffset}`,
+    )
+  }
+
+  setInterval(() => { void runAutoIncrement() }, AUTO_INCREMENT_INTERVAL_MS)
+  console.log(`⏱️   Auto-increment every ${AUTO_INCREMENT_INTERVAL_MS / 60_000} minutes`)
+
+  app.listen(PORT, () => {
+    console.log(`🚀  Nexus API  →  http://localhost:${PORT}`)
+  })
+}
 
 bootstrap().catch((err: unknown) => {
   console.error('❌  Bootstrap failed:', err)
