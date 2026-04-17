@@ -1,0 +1,1 @@
+mongodb+srv://nexusnexeu_db_user:nLmr8CrvODBEcaew@cluster0.fqjemtc.mongodb.net/?appName=Cluster0
