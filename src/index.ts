@@ -40,9 +40,9 @@ interface WaitlistRequestBody {
 
 // ─── BASE NUMBERS ─────────────────────────────────────────────────────────────
 
-const BASE_BRANDS:      number = 312
-const BASE_INFLUENCERS: number = 1_046
-const BASE_AGENCIES:    number = 127
+const BASE_BRANDS:      number = 88
+const BASE_INFLUENCERS: number = 446
+const BASE_AGENCIES:    number = 67
 
 const AUTO_INCREMENT_INTERVAL_MS: number = 3 * 60 * 1_000
 
